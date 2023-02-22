@@ -4,7 +4,7 @@ This project is a [React App](https://github.com/facebook/create-react-app) that
 
 ## Sounds
 Sounds have to be places into the `sounds/` folder and will be displayed in the app as buttons.\
-Currently, only `.wav` files are supported.
+Currently, only `.mp3` and `.wav` files are supported.
 
 ## Configuration
 If the app is launched from the local PC where it is running, the audio settings are displayed at the top.\

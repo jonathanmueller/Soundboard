@@ -80,7 +80,8 @@ function Frontend() {
             </Form.Group>
             <Form.Group as={Row} className="mb-3">
               <Form.Label column xs={12} md={3} lg={2} xl={1}></Form.Label>
-              <Col><Button onClick={() => setShowQRCode(true)}><Icon.QrCode /> URL anzeigen</Button></Col>
+              <Col xs={6} md={3}><Button onClick={() => setShowQRCode(true)}><Icon.QrCode /> URL anzeigen</Button></Col>
+              {/* <Col xs={6} md={3}><Button onClick={() => fetch("api/convert", { method: "PUT" })}><Icon.FileMusic /> Neue Sounds konvertieren</Button></Col> */}
             </Form.Group>
           </Form>
           <Modal show={showQRCode} onHide={() => setShowQRCode(false)} centered>
@@ -95,6 +96,12 @@ function Frontend() {
         {files?.map(f => <React.Fragment key={f.fileName}>
           <Col xs={6} md={2} className="mb-4"><Button className="h-100 w-100" onClick={() => playSound.mutate(f)}>{f.title}</Button></Col>
         </React.Fragment>)}
+        {files !== undefined && files.length === 0 &&
+          <p className="lead text-center">
+            Keine Sounds vorhanden.<br />
+            Bitte Dateien ins <code>sounds/</code> Verzeichnis laden.
+          </p>
+        }
       </Row>
     </Container>
   );

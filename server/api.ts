@@ -1,12 +1,16 @@
 import express from "express";
 import fs from 'fs';
 import ip from 'ip';
-import { Lame } from 'node-lame';
+// @ts-ignore:next-line
+import AV from 'av';
 import QRCode from "qrcode";
 import stream from 'stream';
 import * as wav from 'wav';
+require('mp3');
+
 import { PORT, SOUND_FOLDER } from "./config";
 
+import _ from "lodash";
 import * as PortAudio from 'naudiodon';
 
 export const api = express();
@@ -14,12 +18,13 @@ export const api = express();
 api.use(express.json())
 api.use(express.urlencoded({ extended: true }))
 
-const KNOWN_EXTENSIONS = ['wav']; // ['mp3', 'wav', 'ogg', 'm4a'];
+const KNOWN_EXTENSIONS = ['wav', 'mp3']; //, 'wav', 'ogg', 'm4a'];
 
 interface SoundInfo {
     fileName: string
     title: string
 }
+
 
 if (!(fs.existsSync(SOUND_FOLDER) && fs.lstatSync(SOUND_FOLDER).isDirectory())) {
     try {
@@ -59,7 +64,7 @@ api.get("/files", (req, res, next) => {
                 } catch (e) {
                     return {
                         fileName: f,
-                        title: f
+                        title: f.substring(0, f.lastIndexOf('.') || f.length)
                     } as SoundInfo
                 }
             });
@@ -71,10 +76,38 @@ api.get("/files", (req, res, next) => {
     }
 })
 
+const audioDevices: { options: PortAudio.AudioOptions, device: PortAudio.IoStreamWrite }[] = [];
+
+function getAudioDeviceForOptions(options: PortAudio.AudioOptions) {
+    options.closeOnError = false;
+
+    let entry = audioDevices.filter(p => _.isEqual(p.options, options))[0];
+    if (entry === undefined) {
+        let device = PortAudio.AudioIO({
+            outOptions: { ...options }
+        });
+        entry = {
+            options: { ...options },
+            device: device
+        };
+        audioDevices.push(entry);
+
+        device.start();
+    }
+
+    return entry.device;
+}
+
 const audios: { [id: number]: PortAudio.IoStreamWrite } = {};
 let AUDIO_ID = 0;
+let currentlyPlaying = 0;
 api.post('/play', async (req, res, next) => {
     try {
+        if (currentlyPlaying > 0) {
+            res.sendStatus(423);
+            return;
+        }
+
         AUDIO_ID++;
 
         const file = req.body.file;
@@ -87,22 +120,32 @@ api.post('/play', async (req, res, next) => {
             sampleFormat: PortAudio.SampleFormat16Bit,
             sampleRate: 48000,
             deviceId: deviceId, // Use -1 or omit the deviceId to select the default device
-            closeOnError: true // Close the stream if an audio error is detected, if set false then just log the error
+            closeOnError: false // Close the stream if an audio error is detected, if set false then just log the error
         };
 
         const extension = file.toLowerCase().substring(file.lastIndexOf('.') + 1);
 
+        let duration: number
         let audioStream: stream.Readable;
         if (extension === 'mp3') {
-            const decoder = new Lame({ output: "buffer", bitwidth: 16, resample: 48 }).setFile(filePath);
-            const emitter = decoder.getEmitter();
-            emitter.on("error", (error) => console.error("Decode error: ", error));
-            emitter.on("format", (f) => console.log("format", f))
-            emitter.on("data", (d) => console.log("data", d))
-            let buffer = await decoder.decode().then(() => decoder.getBuffer()).catch(console.error);
-            audioStream = new stream.PassThrough().end(buffer);
+            let decoder = AV.Asset.fromBuffer(fs.readFileSync(filePath));
+
+            decoder.on("error", e => console.error(e));
+
+            const buffer: Float32Array = await new Promise((res, rej) => decoder.decodeToBuffer(buffer => res(buffer)));
+
+            const passThrough = new stream.PassThrough();
+            passThrough.end(Buffer.from(buffer.buffer));
+            audioStream = passThrough;
+
+            audioOptions.sampleFormat = PortAudio.SampleFormatFloat32;
+            audioOptions.sampleRate = decoder.format!.sampleRate;
+            audioOptions.channelCount = decoder.format!.channelsPerFrame;
+
+            duration = decoder.duration ?? 0;
         } else if (extension === 'wav') {
-            let fileStream = fs.createReadStream(filePath);
+            const fileSize = fs.lstatSync(filePath).size;
+            const fileStream = fs.createReadStream(filePath);
             const reader = new wav.Reader();
 
             fileStream.pipe(reader);
@@ -113,43 +156,36 @@ api.post('/play', async (req, res, next) => {
                     audioOptions.sampleFormat = f.bitDepth as (1 | 8 | 16 | 24 | 32);
                     res();
                 });
+                reader.on("error", e => rej(e));
             });
 
             audioStream = reader;
+
+            duration = fileSize / ((audioOptions.sampleRate! / 1000) * (audioOptions.sampleFormat! / 8));
         } else {
             throw new Error(`Unknown file extension '${extension}'`);
         }
 
-        let audioOutput = PortAudio.AudioIO({
-            outOptions: audioOptions
-        });
-
-        audioOutput.on('error', e => console.log("error", e))
-
+        let audioOutput = getAudioDeviceForOptions(audioOptions);
 
         console.log(`Playing ${extension} file '${file}' on ${deviceId}...`)
 
-        audioStream.on('error', () => {
-            console.log("audioStream.error");
-            audioOutput.quit(() => {
-                console.log(`Finished playing ${file}`);
-                delete audios[AUDIO_ID];
-            });
-        });
-
         audioStream.on('end', () => {
-            console.log(`Finished playing ${file}`);
-            audioOutput.quit(() => {
-                console.log(`Finished playing ${file}`);
-                delete audios[AUDIO_ID];
-            });
+            /* finished streaming to audio device */
         });
 
-        audioStream.pipe(audioOutput);
 
-        setTimeout(() => audioOutput.start(), 0);
 
-        audios[AUDIO_ID] = audioOutput;
+        audioStream.pipe(audioOutput, { end: false });
+
+        currentlyPlaying++;
+
+        console.log(`playing ${currentlyPlaying} sounds`)
+
+        setTimeout(() => {
+            console.log(`Finished playing ${file}`);
+            currentlyPlaying--;
+        }, Math.max(0, duration - 500));
 
         res.send();
     } catch (error) {

@@ -22,7 +22,12 @@ app.use("/files", express.static(SOUND_FOLDER));
 
 app.get('*', (req, res) => { res.sendFile(path.join(publicPath, 'index.html')); });
 
-app.listen(PORT, () => { console.log(`App listening on port ${PORT}`); });
+app
+    .listen(PORT, () => { console.log(`App listening on port ${PORT}`); })
+    .on('error', e => {
+        console.error(`Error starting server: ${e}`);
+        process.exit(1);
+    });
 
 let menuItems: (MenuItem & { id?: string })[] = [
     {
@@ -51,11 +56,18 @@ const systray = new SysTray({
     }
 });
 
+process
+    .on('exit', function () {
+        /* Sometimes, the process gets stuck, so we kill it */
+        process.kill(process.pid, 'SIGTERM');
+    });
+
 systray.onClick(action => {
     let id = menuItems[action.seq_id].id;
 
     switch (id) {
         case 'exit':
+            console.log("Exiting.")
             process.exit(0);
             break;
         case 'open':
