@@ -1,28 +1,23 @@
-import express from "express";
+import { spawn } from 'child_process';
+import express from 'express';
 import fs from 'fs';
 import ip from 'ip';
-// @ts-ignore:next-line
-import AV from 'av';
-import QRCode from "qrcode";
-import stream from 'stream';
-import * as wav from 'wav';
-require('mp3');
-
-import { PORT, SOUND_FOLDER } from "./config";
-
-import _ from "lodash";
 import * as PortAudio from 'naudiodon';
+import path from 'path';
+import QRCode from 'qrcode';
+
+import { PORT, SOUND_FOLDER } from './config';
 
 export const api = express();
 
-api.use(express.json())
-api.use(express.urlencoded({ extended: true }))
+api.use(express.json());
+api.use(express.urlencoded({ extended: true }));
 
 const KNOWN_EXTENSIONS = ['wav', 'mp3']; //, 'wav', 'ogg', 'm4a'];
 
 interface SoundInfo {
-    fileName: string
-    title: string
+    fileName: string;
+    title: string;
 }
 
 
@@ -65,7 +60,7 @@ api.get("/files", (req, res, next) => {
                     return {
                         fileName: f,
                         title: f.substring(0, f.lastIndexOf('.') || f.length)
-                    } as SoundInfo
+                    } as SoundInfo;
                 }
             });
 
@@ -74,122 +69,62 @@ api.get("/files", (req, res, next) => {
     } catch (error) {
         next(error);
     }
-})
+});
 
-const audioDevices: { options: PortAudio.AudioOptions, device: PortAudio.IoStreamWrite }[] = [];
 
-function getAudioDeviceForOptions(options: PortAudio.AudioOptions) {
-    options.closeOnError = false;
+let OUTPUT_DEVICE = "";
 
-    let entry = audioDevices.filter(p => _.isEqual(p.options, options))[0];
-    if (entry === undefined) {
-        let device = PortAudio.AudioIO({
-            outOptions: { ...options }
-        });
-        entry = {
-            options: { ...options },
-            device: device
-        };
-        audioDevices.push(entry);
-
-        device.start();
+api.get("/outputDevice", async (req, res, next) => {
+    try {
+        res.setHeader("Content-Type", "application/json");
+        res.send(JSON.stringify({ "name": OUTPUT_DEVICE }));
+    } catch (e) {
+        console.log(`error ${e}`);
+        next(e);
     }
+});
 
-    return entry.device;
-}
+api.post("/outputDevice", async (req, res, next) => {
+    try {
+        OUTPUT_DEVICE = req.body.name;
+        console.log("set output device: '" + OUTPUT_DEVICE + "'");
+        res.sendStatus(200);
+    } catch (e) {
+        console.log(`error ${e}`);
+        next(e);
+    }
+});
 
-const audios: { [id: number]: PortAudio.IoStreamWrite } = {};
-let AUDIO_ID = 0;
-let currentlyPlaying = 0;
+
 api.post('/play', async (req, res, next) => {
     try {
-        if (currentlyPlaying > 0) {
-            res.sendStatus(423);
-            return;
-        }
-
-        AUDIO_ID++;
-
         const file = req.body.file;
-        const deviceId = parseInt(req.body.deviceId) || -1;
 
-        const filePath = `${SOUND_FOLDER}/${file}`;
+        const filePath = path.resolve(`${SOUND_FOLDER}/${file}`);
 
-        let audioOptions: PortAudio.AudioOptions = {
-            channelCount: 1,
-            sampleFormat: PortAudio.SampleFormat16Bit,
-            sampleRate: 48000,
-            deviceId: deviceId, // Use -1 or omit the deviceId to select the default device
-            closeOnError: false // Close the stream if an audio error is detected, if set false then just log the error
-        };
+        console.log(`Playing '${file}' on device '${OUTPUT_DEVICE}'...`);
 
-        const extension = file.toLowerCase().substring(file.lastIndexOf('.') + 1);
-
-        let duration: number
-        let audioStream: stream.Readable;
-        if (extension === 'mp3') {
-            let decoder = AV.Asset.fromBuffer(fs.readFileSync(filePath));
-
-            decoder.on("error", e => console.error(e));
-
-            const buffer: Float32Array = await new Promise((res, rej) => decoder.decodeToBuffer(buffer => res(buffer)));
-
-            const passThrough = new stream.PassThrough();
-            passThrough.end(Buffer.from(buffer.buffer));
-            audioStream = passThrough;
-
-            audioOptions.sampleFormat = PortAudio.SampleFormatFloat32;
-            audioOptions.sampleRate = decoder.format!.sampleRate;
-            audioOptions.channelCount = decoder.format!.channelsPerFrame;
-
-            duration = decoder.duration ?? 0;
-        } else if (extension === 'wav') {
-            const fileSize = fs.lstatSync(filePath).size;
-            const fileStream = fs.createReadStream(filePath);
-            const reader = new wav.Reader();
-
-            fileStream.pipe(reader);
-            await new Promise<void>((res, rej) => {
-                reader.on("format", f => {
-                    audioOptions.channelCount = f.channels;
-                    audioOptions.sampleRate = f.sampleRate;
-                    audioOptions.sampleFormat = f.bitDepth as (1 | 8 | 16 | 24 | 32);
-                    res();
-                });
-                reader.on("error", e => rej(e));
-            });
-
-            audioStream = reader;
-
-            duration = fileSize / ((audioOptions.sampleRate! / 1000) * (audioOptions.sampleFormat! / 8));
-        } else {
-            throw new Error(`Unknown file extension '${extension}'`);
+        var process = spawn("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", [
+            "-Incurse",
+            "--play-and-exit",
+            "--aout=waveout",
+            "--waveout-audio-device=" + OUTPUT_DEVICE + "",
+            filePath
+        ], { stdio: 'ignore' });
+        if (!process) {
+            throw new Error("Unable to spawn vlc process");
         }
 
-        let audioOutput = getAudioDeviceForOptions(audioOptions);
+        process.on('close', (e: any) => {
+            if (e) { console.error("Error playing: ", e); }
 
-        console.log(`Playing ${extension} file '${file}' on ${deviceId}...`)
-
-        audioStream.on('end', () => {
-            /* finished streaming to audio device */
+            console.log(`Finished playing ${file}`);
         });
 
-
-
-        audioStream.pipe(audioOutput, { end: false });
-
-        currentlyPlaying++;
-
-        console.log(`playing ${currentlyPlaying} sounds`)
-
-        setTimeout(() => {
-            console.log(`Finished playing ${file}`);
-            currentlyPlaying--;
-        }, Math.max(0, duration - 500));
 
         res.send();
     } catch (error) {
-        console.log(`error ${error}`)
+        console.log(`error ${error}`);
 
         next(error);
     }
@@ -199,15 +134,15 @@ api.post('/play', async (req, res, next) => {
 api.delete('/sound/:id', (req, res, next) => {
     try {
         let id = parseInt(req.params.id);
-        let audio = audios[id];
-        audio?.abort();
-        delete audios[id];
+        // let audio = audios[id];
+        // audio?.abort();
+        // delete audios[id];
 
         res.send();
     } catch (error) {
         next(error);
     }
-})
+});
 
 function getLocation() {
     const openPort = process.env.NODE_ENV === 'development' ? 3000 : PORT;
@@ -222,7 +157,7 @@ api.get('/location', async (req, res, next) => {
     } catch (e) {
         next(e);
     }
-})
+});
 
 api.get('/location.png', async (req, res, next) => {
     try {
