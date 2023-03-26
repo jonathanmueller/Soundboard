@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { DeviceInfo, HostInfo } from 'naudiodon';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Col, Container, Form, Image, Modal, Row } from 'react-bootstrap';
 import * as Icon from 'react-bootstrap-icons';
 import Button from 'react-bootstrap/Button';
@@ -27,18 +27,15 @@ const isLocalhost = Boolean(
 function Frontend() {
   const files = useFiles();
 
-  const [selectedHostAPI, setSelectedHostAPI] = useState(localStorage.getItem('selectedHostAPI') || '');
-  const [selectedDeviceId, setSelectedDeviceId] = useState(parseInt(localStorage.getItem('selectedDeviceId') || '-1') || -1);
+  const [selectedDeviceName, setSelectedDeviceName] = useState('');
 
-  const [selectedDeviceName, setSelectedDeviceName] = useState(localStorage.getItem('selectedDeviceName') || '');
+  const deviceQuery = useQuery(['outputDevice'], () => fetch('/api/outputDevice').then(r => r.json()), {
+    onSuccess: data => setSelectedDeviceName(data.name),
+    refetchInterval: false,
+    refetchOnWindowFocus: false
+  });
 
   const [showQRCode, setShowQRCode] = useState(false);
-
-  useEffect(() => localStorage.setItem('selectedHostAPI', selectedHostAPI), [selectedHostAPI]);
-  useEffect(() => localStorage.setItem('selectedDeviceId', '' + selectedDeviceId), [selectedDeviceId]);
-  useEffect(() => localStorage.setItem('selectedDeviceName', '' + selectedDeviceName), [selectedDeviceName]);
-
-  const devicesQuery = useQuery<AudioDevices>(['audiodevices'], () => fetch("/api/devices").then(r => r.json()));
 
   const playSound = useMutation((f: SoundInfo) => fetch("/api/play", {
     method: 'POST',
@@ -48,28 +45,6 @@ function Frontend() {
       `deviceName=${encodeURIComponent(selectedDeviceName)}` +
       `&file=${encodeURIComponent(f.fileName)}`
   }));
-
-  const hostApis = devicesQuery.data?.hostApis;
-  const devicesForSelectedHostAPI = devicesQuery.data?.devices.filter(device => device.hostAPIName === selectedHostAPI);
-
-  useEffect(() => {
-    if (!selectedHostAPI && devicesQuery.data?.hostApis) {
-      const newHostApi = devicesQuery.data.hostApis[0].name;
-      const devicesForNewHostApi = devicesQuery.data.devices.filter(device => device.hostAPIName === newHostApi);
-      setSelectedHostAPI(newHostApi);
-      if (devicesForNewHostApi.length && devicesForNewHostApi.filter(device => device.id === selectedDeviceId).length === 0) {
-        setSelectedDeviceId(devicesForNewHostApi[0].id);
-      }
-    }
-  }, [selectedDeviceId, selectedHostAPI, devicesQuery.data]);
-
-  useEffect(() => {
-    if (selectedHostAPI) {
-      if (devicesForSelectedHostAPI?.filter(device => device.id === selectedDeviceId).length === 0) {
-        setSelectedDeviceId(devicesForSelectedHostAPI[0]?.id || -1);
-      }
-    }
-  }, [devicesForSelectedHostAPI, selectedDeviceId, selectedHostAPI]);
 
   const updateOutputDevice = useMutation((name: string) => fetch("/api/outputDevice", {
     method: 'POST',
@@ -93,7 +68,7 @@ function Frontend() {
                 <Form.Select onChange={e => setSelectedDeviceId(parseInt(e.target.value))} value={selectedDeviceId}>{devicesForSelectedHostAPI?.map(device => <option key={device.id} value={device.id}>{device.name}</option>)}</Form.Select>
               </Col> */}
               <Col xs={12} md={9} lg={10} xl={11}>
-                <Form.Control type="text" value={selectedDeviceName} disabled={updateOutputDevice.isLoading} onChange={e => setSelectedDeviceName(e.target.value)} onBlur={e => updateOutputDevice.mutate(e.target.value)} />
+                <Form.Control type="text" value={selectedDeviceName} disabled={updateOutputDevice.isLoading || !deviceQuery.isSuccess} onChange={e => setSelectedDeviceName(e.target.value)} onBlur={e => updateOutputDevice.mutate(e.target.value)} />
               </Col>
             </Form.Group>
             <Form.Group as={Row} className="mb-3">

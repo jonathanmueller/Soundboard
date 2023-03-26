@@ -71,13 +71,25 @@ api.get("/files", (req, res, next) => {
     }
 });
 
+let config: any;
+try {
+    config = JSON.parse(fs.readFileSync("config.json").toString());
+} catch (error) { }
 
-let OUTPUT_DEVICE = "";
+if (typeof config !== 'object') {
+    config = {};
+}
+
+function saveConfig() {
+    try {
+        fs.writeFileSync("config.json", JSON.stringify(config));
+    } catch (error) { }
+}
 
 api.get("/outputDevice", async (req, res, next) => {
     try {
         res.setHeader("Content-Type", "application/json");
-        res.send(JSON.stringify({ "name": OUTPUT_DEVICE }));
+        res.send(JSON.stringify({ "name": config.outputDevice }));
     } catch (e) {
         console.log(`error ${e}`);
         next(e);
@@ -86,8 +98,9 @@ api.get("/outputDevice", async (req, res, next) => {
 
 api.post("/outputDevice", async (req, res, next) => {
     try {
-        OUTPUT_DEVICE = req.body.name;
-        console.log("set output device: '" + OUTPUT_DEVICE + "'");
+        config.outputDevice = req.body.name;
+        console.log("set output device: '" + config.outputDevice + "'");
+        saveConfig();
         res.sendStatus(200);
     } catch (e) {
         console.log(`error ${e}`);
@@ -102,13 +115,13 @@ api.post('/play', async (req, res, next) => {
 
         const filePath = path.resolve(`${SOUND_FOLDER}/${file}`);
 
-        console.log(`Playing '${file}' on device '${OUTPUT_DEVICE}'...`);
+        console.log(`Playing '${file}' on device '${config.outputDevice}'...`);
 
         var process = spawn("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe", [
             "-Incurse",
             "--play-and-exit",
             "--aout=waveout",
-            "--waveout-audio-device=" + OUTPUT_DEVICE + "",
+            "--waveout-audio-device=" + config.outputDevice + "",
             filePath
         ], { stdio: 'ignore' });
         if (!process) {
